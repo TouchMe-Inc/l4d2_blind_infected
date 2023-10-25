@@ -11,7 +11,7 @@ public Plugin myinfo =
 	name = "VersusBlindInfected",
 	author = "CanadaRox, TouchMe",
 	description = "Hides all items from the infected team until they are (possibly) visible to one of the survivors to prevent exploration of the map",
-	version = "build0000",
+	version = "build0001",
 	url = "https://github.com/TouchMe-Inc/l4d2_blind_infected"
 };
 
@@ -73,6 +73,27 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
 {
 	ClearArray(g_hHiddenEntities);
 
+	Handle hPlayerItems = CreateArray();
+
+	int iWeapon = -1;
+
+	for (int iClient = 1; iClient <= MaxClients; iClient++)
+	{
+		if (!IsClientInGame(iClient) || !IsClientSurvivor(iClient)) {
+			continue;
+		}
+
+		if ((iWeapon = GetPlayerWeaponSlot(iClient, 0)) != -1) {
+			PushArrayCell(hPlayerItems, iWeapon);
+		}
+
+		if ((iWeapon = GetPlayerWeaponSlot(iClient, 1)) != -1) {
+			PushArrayCell(hPlayerItems, iWeapon);
+		}
+	}
+
+	int iPlayerItemsSize = GetArraySize(hPlayerItems);
+
 	char iEntClassname[ENTITY_NAME_SIZE];
 	int iHiddenEntity[ARRAY_SIZE], iEntityCount = GetEntityCount();
 
@@ -93,8 +114,22 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
 		iHiddenEntity[ENT_REF] = EntIndexToEntRef(iEnt);
 		iHiddenEntity[CAN_SEE] = false;
 
+		/**
+		* Show weapons in the hands of survivors.
+		*/
+		for (int iItem = 0; iItem < iPlayerItemsSize; iItem ++)
+		{
+			if (iEnt == GetArrayCell(hPlayerItems, iItem))
+			{
+				iHiddenEntity[CAN_SEE] = true;
+				break;
+			}
+		}
+
 		PushArrayArray(g_hHiddenEntities, iHiddenEntity, sizeof(iHiddenEntity));
 	}
+
+	CloseHandle(hPlayerItems);
 
 	g_iHiddenEntitiesSize = GetArraySize(g_hHiddenEntities);
 
