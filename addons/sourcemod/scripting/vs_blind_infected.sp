@@ -109,8 +109,6 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
 			continue;
 		}
 
-		LogMessage("> %s", sEntClassname);
-
 		SDKHook(iEnt, SDKHook_SetTransmit, OnTransmit);
 
 		iHiddenEntity[ENT_REF] = EntIndexToEntRef(iEnt);
