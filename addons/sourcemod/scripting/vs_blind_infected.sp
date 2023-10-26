@@ -11,7 +11,7 @@ public Plugin myinfo =
 	name = "VersusBlindInfected",
 	author = "CanadaRox, TouchMe",
 	description = "Hides all items from the infected team until they are (possibly) visible to one of the survivors to prevent exploration of the map",
-	version = "build0001",
+	version = "build0002",
 	url = "https://github.com/TouchMe-Inc/l4d2_blind_infected"
 };
 
@@ -94,7 +94,7 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
 
 	int iPlayerItemsSize = GetArraySize(hPlayerItems);
 
-	char iEntClassname[ENTITY_NAME_SIZE];
+	char sEntClassname[ENTITY_NAME_SIZE];
 	int iHiddenEntity[ARRAY_SIZE], iEntityCount = GetEntityCount();
 
 	for (int iEnt = (MaxClients + 1); iEnt < iEntityCount; iEnt ++)
@@ -103,11 +103,13 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
 			continue;
 		}
 	
-		GetEdictClassname(iEnt, iEntClassname, sizeof(iEntClassname));
+		GetEdictClassname(iEnt, sEntClassname, sizeof(sEntClassname));
 
-		if (strcmp(iEntClassname, "weapon_") == -1) {
+		if (sEntClassname[0] != 'w' || sEntClassname[6] != '_' || StrContains(sEntClassname, "_claw", true) != -1) {
 			continue;
 		}
+
+		LogMessage("> %s", sEntClassname);
 
 		SDKHook(iEnt, SDKHook_SetTransmit, OnTransmit);
 
@@ -164,7 +166,12 @@ Action Timer_EntCheck(Handle hTimer)
 }
 
 void Event_RoundEnd(Event event, const char[] sEventName, bool bDontBroadcast) {
-	g_hTimer = INVALID_HANDLE;
+
+	if (g_hTimer != INVALID_HANDLE)
+	{
+		CloseHandle(g_hTimer);
+		g_hTimer = INVALID_HANDLE;
+	}
 }
 
 Action OnTransmit(int iEntity, int iClient)
