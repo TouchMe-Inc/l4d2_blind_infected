@@ -9,9 +9,9 @@
 
 public Plugin myinfo = {
     name        = "VersusBlindInfected",
-    author      = "CanadaRox, TouchMe",
+    author      = "CanadaRox, ProdigySim, TouchMe, Ferks-FK",
     description = "Hides all items from the infected team until they are (possibly) visible to one of the survivors to prevent exploration of the map",
-    version     = "build0003",
+    version     = "build_0004",
     url         = "https://github.com/TouchMe-Inc/l4d2_blind_infected"
 };
 
@@ -19,13 +19,26 @@ public Plugin myinfo = {
 #define TEAM_SURVIVOR           2
 #define TEAM_INFECTED           3
 
-#define ENT_CHECK_INTERVAL      1.0
+#define ENT_CHECK_SLICE         0.1
+#define ENT_CHECK_SLICES        10
+
 #define TRACE_TOLERANCE         75.0
 #define ENTITY_NAME_SIZE        32
 
+#define MAX_ENTS                2048
 
-ArrayList g_hHiddenEntities = null;
 
+ArrayList g_hHiddenEntityRefs = null;
+
+int g_iCursor = 0;
+
+bool g_bHiddenEntityIndex[MAX_ENTS + 1];
+
+ConVar g_cvSurvivorLimit = null;
+int    g_iSurvivorLimit = 0;
+
+
+bool g_bLateLoad = false;
 
 /**
  * Called before OnPluginStart.
@@ -38,29 +51,48 @@ ArrayList g_hHiddenEntities = null;
  */
 public APLRes AskPluginLoad2(Handle myself, bool bLate, char[] sErr, int iErrLen)
 {
-    EngineVersion engine = GetEngineVersion();
-
-    if (engine != Engine_Left4Dead2)
+    if (GetEngineVersion() != Engine_Left4Dead2)
     {
         strcopy(sErr, iErrLen, "Plugin only supports Left 4 Dead 2");
         return APLRes_SilentFailure;
     }
+
+    g_bLateLoad = bLate;
 
     return APLRes_Success;
 }
 
 public void OnPluginStart()
 {
-    g_hHiddenEntities = CreateArray();
+    g_hHiddenEntityRefs = CreateArray();
 
     HookEvent("round_start", Event_RoundStart, EventHookMode_PostNoCopy);
 
-    CreateTimer(ENT_CHECK_INTERVAL, Timer_EntCheck, .flags = TIMER_REPEAT);
+    g_cvSurvivorLimit = FindConVar("survivor_limit");
+    g_iSurvivorLimit = GetConVarInt(g_cvSurvivorLimit);
+    HookConVarChange(g_cvSurvivorLimit, OnSurvivorLimitChanged);
+
+    CreateTimer(ENT_CHECK_SLICE, Timer_EntCheck, .flags = TIMER_REPEAT);
+
+    if (g_bLateLoad)
+    {
+        for (int iClient = 1; iClient <= MaxClients; iClient++)
+        {
+            if (IsClientInGame(iClient)) {
+                OnClientPutInServer(iClient);
+            }
+        }
+    }
+}
+
+public void OnSurvivorLimitChanged(ConVar convar, const char[] oldValue, const char[] newValue)
+{
+    g_iSurvivorLimit = GetConVarInt(convar);
 }
 
 void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
 {
-    ClearArray(g_hHiddenEntities);
+    ResetHiddenEntities();
 
     ArrayList hPlayerItems = CreateArray();
 
@@ -82,7 +114,7 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
     }
 
     char szEntClassname[ENTITY_NAME_SIZE];
-    int iEntityCount = GetEntityCount();
+    int iEntityCount = GetMaxEntities();
 
     for (int iEnt = (MaxClients + 1); iEnt < iEntityCount; iEnt ++)
     {
@@ -99,7 +131,9 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
             continue;
         }
 
-        PushArrayCell(g_hHiddenEntities, EntIndexToEntRef(iEnt));
+        PushArrayCell(g_hHiddenEntityRefs, EntIndexToEntRef(iEnt));
+
+        g_bHiddenEntityIndex[iEnt] = true;
 
         SDKHook(iEnt, SDKHook_SetTransmit, Hook_SetTransmit);
     }
@@ -107,56 +141,115 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
     CloseHandle(hPlayerItems);
 }
 
+public void OnClientPutInServer(int iClient) {
+    SDKHook(iClient, SDKHook_WeaponEquipPost, OnWeaponEquipPost);
+}
+
+void OnWeaponEquipPost(int iClient, int iWeapon)
+{
+    if (IsNotClientIndex(iWeapon) && g_bHiddenEntityIndex[iWeapon]) {
+        ShowEntity(iWeapon);
+    }
+}
+
+public void OnEntityDestroyed(int iEntity)
+{
+    if (IsNotClientIndex(iEntity)) {
+        g_bHiddenEntityIndex[iEntity] = false;
+    }
+}
+
 Action Timer_EntCheck(Handle hTimer)
 {
-    int iAliveSurvivors[MAXPLAYERS + 1];
-    int iAliveSurvivorsCount = 0;
-    for (int iClient = 1; iClient <= MaxClients; iClient++)
-    {
-        if (IsClientInGame(iClient) && IsClientSurvivor(iClient) && IsPlayerAlive(iClient)) {
-            iAliveSurvivors[iAliveSurvivorsCount ++] = iClient;
-        }
+    int iSize = GetArraySize(g_hHiddenEntityRefs);
+    if (iSize == 0) {
+        return Plugin_Continue;
     }
 
-    for (int iIndex = GetArraySize(g_hHiddenEntities) - 1; iIndex >= 0; iIndex --)
+    if (g_iCursor >= iSize) {
+        g_iCursor = 0;
+    }
+
+    int iProcessed = 0;
+    int iBatch = (iSize + ENT_CHECK_SLICES - 1) / ENT_CHECK_SLICES;
+
+    while (iProcessed < iBatch && g_iCursor < GetArraySize(g_hHiddenEntityRefs))
     {
-        int iEntityRef = GetArrayCell(g_hHiddenEntities, iIndex);
+        int iEntityRef = GetArrayCell(g_hHiddenEntityRefs, g_iCursor);
         int iEntity = EntRefToEntIndex(iEntityRef);
-    
-        if (iEntity == INVALID_ENT_REFERENCE) {
+
+        if (iEntity == INVALID_ENT_REFERENCE || !g_bHiddenEntityIndex[iEntity])
+        {
+            RemoveFromArray(g_hHiddenEntityRefs, g_iCursor);
+            iProcessed++;
             continue;
         }
 
-        for (int iSurvivorIndex = 0; iSurvivorIndex < iAliveSurvivorsCount; iSurvivorIndex++)
+        if (IsVisibleToSurvivors(iEntity))
         {
-            if (IsClientSeeEntity(iAliveSurvivors[iSurvivorIndex], iEntity))
-            {
-                RemoveFromArray(g_hHiddenEntities, iIndex);
-                break;
-            }
+            ShowEntity(iEntity);
+            RemoveFromArray(g_hHiddenEntityRefs, g_iCursor);
+            iProcessed++;
+            continue;
         }
+
+        g_iCursor++;
+        iProcessed++;
     }
 
     return Plugin_Continue;
 }
 
-Action Hook_SetTransmit(int iTransmitEntity, int iClient)
+bool IsVisibleToSurvivors(int iEntity)
 {
-    if (!IsClientInfected(iClient)) {
-        return Plugin_Continue;
-    }
+    int iSurvivorsCount = 0;
 
-    for (int iIndex = GetArraySize(g_hHiddenEntities) - 1; iIndex >= 0; iIndex --)
+    for (int iClient = 1; iClient <= MaxClients && iSurvivorsCount < g_iSurvivorLimit; iClient ++)
     {
-        int iEntityRef = GetArrayCell(g_hHiddenEntities, iIndex);
-        int iEntity = EntRefToEntIndex(iEntityRef);
-    
-        if (iEntity == iTransmitEntity) {
-            return Plugin_Handled;
+        if (!IsClientInGame(iClient) || !IsClientSurvivor(iClient)) {
+            continue;
+        }
+
+        iSurvivorsCount++;
+
+        if (IsPlayerAlive(iClient) && IsClientSeeEntity(iClient, iEntity)) {
+            return true;
         }
     }
 
-    return Plugin_Continue;
+    return false;
+}
+
+Action Hook_SetTransmit(int iTransmitEntity, int iClient)
+{
+    if (!IsNotClientIndex(iTransmitEntity) || !g_bHiddenEntityIndex[iTransmitEntity]) {
+        return Plugin_Continue;
+    }
+
+    if (IsClientSurvivor(iClient)) {
+        return Plugin_Continue;
+    }
+
+    return Plugin_Handled;
+}
+
+void ShowEntity(int iEntity)
+{
+    SDKUnhook(iEntity, SDKHook_SetTransmit, Hook_SetTransmit);
+    g_bHiddenEntityIndex[iEntity] = false;
+}
+
+void ResetHiddenEntities()
+{
+    for (int iEnt = (MaxClients + 1); iEnt <= MAX_ENTS; iEnt++) {
+        g_bHiddenEntityIndex[iEnt] = false;
+    }
+
+    if (g_hHiddenEntityRefs != null) {
+        ClearArray(g_hHiddenEntityRefs);
+    }
+
+    g_iCursor = 0;
 }
 
 /**
@@ -164,10 +257,12 @@ Action Hook_SetTransmit(int iTransmitEntity, int iClient)
  */
 bool IsClientSeeEntity(int iClient, int iEntity)
 {
-    float vClientOrigin[3]; GetClientEyePosition(iClient, vClientOrigin);
-    float vEntOrigin[3]; GetEntPropVector(iEntity, Prop_Send, "m_vecOrigin", vEntOrigin);
-    float vLookAt[3]; MakeVectorFromPoints(vClientOrigin, vEntOrigin, vLookAt);
-    float vAngles[3]; GetVectorAngles(vLookAt, vAngles);
+    static float vClientOrigin[3], vEntOrigin[3], vLookAt[3], vAngles[3], vEndPosition[3];
+
+    GetClientEyePosition(iClient, vClientOrigin);
+    GetEntPropVector(iEntity, Prop_Send, "m_vecOrigin", vEntOrigin);
+    MakeVectorFromPoints(vClientOrigin, vEntOrigin, vLookAt);
+    GetVectorAngles(vLookAt, vAngles);
 
     Handle hTrace = TR_TraceRayFilterEx(vClientOrigin, vAngles, MASK_SHOT, RayType_Infinite, Filter_OnlyPhysics);
 
@@ -175,7 +270,7 @@ bool IsClientSeeEntity(int iClient, int iEntity)
 
     if (TR_DidHit(hTrace))
     {
-        float vEndPosition[3]; TR_GetEndPosition(vEndPosition, hTrace);
+        TR_GetEndPosition(vEndPosition, hTrace);
 
         /*
          * if trace ray lenght plus tolerance equal or bigger absolute distance, you hit the targeted zombie.
@@ -194,14 +289,14 @@ bool Filter_OnlyPhysics(int iEnt, int iContentsMask)
         return false;
     }
 
-    char szClassname[ENTITY_NAME_SIZE];
+    static char szClassname[ENTITY_NAME_SIZE];
     GetEdictClassname(iEnt, szClassname, sizeof(szClassname));
 
     return (strcmp(szClassname, "prop_physics", false) != 0);
 }
 
-bool IsClientInfected(int iClient) {
-    return (GetClientTeam(iClient) == TEAM_INFECTED);
+bool IsNotClientIndex(int iIndex) {
+    return (iIndex > MaxClients && iIndex <= MAX_ENTS);
 }
 
 bool IsClientSurvivor(int iClient) {
