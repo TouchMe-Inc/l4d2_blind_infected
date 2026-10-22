@@ -93,7 +93,11 @@ public void OnSurvivorLimitChanged(ConVar convar, const char[] oldValue, const c
 void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
 {
     ResetHiddenEntities();
+    CreateTimer(1.0, Timer_RoundStart, .flags=TIMER_FLAG_NO_MAPCHANGE);
+}
 
+Action Timer_RoundStart(Handle hTimer)
+{
     ArrayList hPlayerItems = CreateArray();
 
     int iWeapon = -1;
@@ -131,6 +135,10 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
             continue;
         }
 
+        if (StrContains(szEntClassname, "_gascan", true) != -1) {
+            continue;
+        }
+
         PushArrayCell(g_hHiddenEntityRefs, EntIndexToEntRef(iEnt));
 
         g_bHiddenEntityIndex[iEnt] = true;
@@ -139,6 +147,8 @@ void Event_RoundStart(Event event, const char[] sEventName, bool bDontBroadcast)
     }
 
     CloseHandle(hPlayerItems);
+
+    return Plugin_Continue;
 }
 
 public void OnClientPutInServer(int iClient) {
@@ -290,7 +300,7 @@ bool Filter_OnlyPhysics(int iEnt, int iContentsMask)
     }
 
     static char szClassname[ENTITY_NAME_SIZE];
-    GetEdictClassname(iEnt, szClassname, sizeof(szClassname));
+    GetEdictClassname(iEnt, szClassname, sizeof szClassname);
 
     return (strcmp(szClassname, "prop_physics", false) != 0);
 }
